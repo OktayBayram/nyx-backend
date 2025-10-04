@@ -75,6 +75,15 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('skipText', ({ roomCode, username }) => {
+    console.log('Skip text received:', { roomCode, username, socketId: socket.id });
+    if (!rooms[roomCode]) return;
+    
+    const room = rooms[roomCode];
+    // Skip event'ini tüm oyunculara bildir
+    io.to(roomCode).emit('textSkipped', { username });
+  });
+
   socket.on('vote', ({ roomCode, choice }) => {
     console.log('Vote received:', { roomCode, choice, socketId: socket.id });
     if (!rooms[roomCode]) return;
