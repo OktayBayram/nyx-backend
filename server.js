@@ -15,6 +15,7 @@ const io = new Server(server, {
 });
 
 const rooms = {};
+const chatBuffers = {}; // roomCode -> array of last messages (max 5)
 
 io.on('connection', (socket) => {
   console.log('Oyuncu baglandi:', socket.id);
@@ -59,6 +60,10 @@ io.on('connection', (socket) => {
 
     socket.join(roomCode);
     socket.emit('roomJoined', { room: rooms[roomCode] });
+    // Send last 5 chat messages if exist
+    if (chatBuffers[roomCode]?.length) {
+      chatBuffers[roomCode].forEach(m => socket.emit('lobbyChatMessage', m));
+    }
     io.to(roomCode).emit('playerJoined', { room: rooms[roomCode] });
     console.log(username, 'odaya katildi:', roomCode);
   });
@@ -75,13 +80,23 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('skipText', ({ roomCode, username }) => {
-    console.log('Skip text received:', { roomCode, username, socketId: socket.id });
+  // Lobby chat: broadcast and keep only last 5
+  socket.on('lobbyChat', ({ roomCode, user, text, time }) => {
+    if (!rooms[roomCode]) return;
+    const payload = { user, text, time };
+    chatBuffers[roomCode] = chatBuffers[roomCode] || [];
+    chatBuffers[roomCode].push(payload);
+    if (chatBuffers[roomCode].length > 5) chatBuffers[roomCode].shift();
+    io.to(roomCode).emit('lobbyChatMessage', payload);
+  });
+
+  socket.on('skipText', ({ roomCode, username, currentPassage }) => {
+    console.log('Skip text received:', { roomCode, username, currentPassage, socketId: socket.id });
     if (!rooms[roomCode]) return;
     
     const room = rooms[roomCode];
     // Skip event'ini tüm oyunculara bildir
-    io.to(roomCode).emit('textSkipped', { username });
+    io.to(roomCode).emit('textSkipped', { username, currentPassage });
   });
 
   socket.on('vote', ({ roomCode, choice }) => {
