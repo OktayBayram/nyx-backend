@@ -112,7 +112,7 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('lobbyChatMessage', payload);
   });
 
-  // Ready toggle per player; auto-start when all NON-HOST players are ready
+  // Ready toggle per player; host approval required (no auto-start)
   socket.on('ready', ({ roomCode, ready }) => {
     const room = rooms[roomCode];
     if (!room) return;
@@ -122,10 +122,6 @@ io.on('connection', (socket) => {
     const readyCount = nonHostIds.filter(id => !!room.ready[id]).length;
     const total = nonHostIds.length;
     io.to(roomCode).emit('readyUpdate', { ready: readyCount, total });
-    if (total > 0 && readyCount === total) {
-      room.gameStarted = true;
-      io.to(roomCode).emit('gameStarted', { room: room });
-    }
   });
 
   // Kick by host
@@ -164,14 +160,21 @@ io.on('connection', (socket) => {
     if (!rooms[roomCode]) return;
 
     const room = rooms[roomCode];
+    // aktif oyuncuları temizle (kopan soketleri çıkar)
+    cleanDisconnected(io, room);
     room.votes[socket.id] = choice;
 
-    const totalPlayers = room.players.length;
-    const totalVotes = Object.keys(room.votes).length;
+    const roomSet = io.sockets.adapter.rooms.get(roomCode);
+    const connectedIds = room.players
+      .map(p => p.id)
+      .filter(id => roomSet && roomSet.has(id) && io.sockets.sockets.get(id));
+    const totalPlayers = connectedIds.length; // tüm bağlı ve odada olan oyuncular
+    const totalVotesFiltered = Object.keys(room.votes).filter(id => connectedIds.includes(id)).length;
 
-    // Voters by choice (usernames)
+    // Voters by choice (usernames) - sadece bağlı oyuncular
     const votersByChoice = {};
     Object.entries(room.votes).forEach(([voterId, voterChoice]) => {
+      if (!connectedIds.includes(voterId)) return;
       const player = room.players.find(p => p.id === voterId);
       const username = player ? player.username : 'Anon';
       if (!votersByChoice[voterChoice]) votersByChoice[voterChoice] = [];
@@ -179,16 +182,21 @@ io.on('connection', (socket) => {
     });
 
     io.to(roomCode).emit('voteUpdate', {
-      votes: totalVotes,
+      votes: totalVotesFiltered,
       total: totalPlayers,
       votersByChoice
     });
 
-    if (totalVotes >= 1) { // Geçici olarak tek kişilik test için
-      const voteCounts = {};
-      Object.values(room.votes).forEach(vote => {
-        voteCounts[vote] = (voteCounts[vote] || 0) + 1;
-      });
+    // Oy sayımları
+    const voteCounts = {};
+    Object.entries(room.votes).forEach(([voterId, vote]) => {
+      if (!connectedIds.includes(voterId)) return; // sadece bağlı oylar
+      voteCounts[vote] = (voteCounts[vote] || 0) + 1;
+    });
+
+    // Tüm oyuncular oy verince sonucu hesapla (çoğunluk çıkmadıysa/tie durumu)
+    if (totalPlayers >= 2 && totalVotesFiltered === totalPlayers) {
+      // voteCounts zaten hesaplı
 
       let winner = null;
       const maxCount = Math.max(...Object.values(voteCounts));
