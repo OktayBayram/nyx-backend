@@ -17,6 +17,11 @@ const io = new Server(server, {
 const rooms = {};
 const chatBuffers = {}; // roomCode -> array of last messages (max 5)
 
+function cleanDisconnected(io, room) {
+  if (!room || !room.players) return;
+  room.players = room.players.filter(p => io.sockets.sockets.get(p.id));
+}
+
 io.on('connection', (socket) => {
   console.log('Oyuncu baglandi:', socket.id);
 
@@ -32,7 +37,8 @@ io.on('connection', (socket) => {
       currentPassage: 0,
       votes: {},
       gameStarted: false,
-      capacity: [2,3,5].includes(capacity) ? capacity : 2
+      capacity: [2,3,5].includes(capacity) ? capacity : 2,
+      ready: {}
     };
 
     socket.join(roomCode);
@@ -47,6 +53,8 @@ io.on('connection', (socket) => {
     }
 
     const room = rooms[roomCode];
+    // prune stale players before capacity check
+    cleanDisconnected(io, room);
     if (room.capacity && room.players.length >= room.capacity) {
       socket.emit('error', { message: 'Oda dolu' });
       return;
@@ -66,6 +74,20 @@ io.on('connection', (socket) => {
     }
     io.to(roomCode).emit('playerJoined', { room: rooms[roomCode] });
     console.log(username, 'odaya katildi:', roomCode);
+  });
+
+  // Client leaves lobby explicitly
+  socket.on('leaveRoom', ({ roomCode }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    room.players = room.players.filter(p => p.id !== socket.id);
+    if (room.ready) delete room.ready[socket.id];
+    try { socket.leave(roomCode); } catch {}
+    if (room.players.length === 0) {
+      delete rooms[roomCode];
+    } else {
+      io.to(roomCode).emit('playerLeft', { room });
+    }
   });
 
   socket.on('startGame', ({ roomCode }) => {
@@ -88,6 +110,44 @@ io.on('connection', (socket) => {
     chatBuffers[roomCode].push(payload);
     if (chatBuffers[roomCode].length > 5) chatBuffers[roomCode].shift();
     io.to(roomCode).emit('lobbyChatMessage', payload);
+  });
+
+  // Ready toggle per player; auto-start when all NON-HOST players are ready
+  socket.on('ready', ({ roomCode, ready }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    room.ready[socket.id] = !!ready;
+    const host = room.players.find(p => p.isHost);
+    const nonHostIds = room.players.filter(p => !p.isHost).map(p => p.id);
+    const readyCount = nonHostIds.filter(id => !!room.ready[id]).length;
+    const total = nonHostIds.length;
+    io.to(roomCode).emit('readyUpdate', { ready: readyCount, total });
+    if (total > 0 && readyCount === total) {
+      room.gameStarted = true;
+      io.to(roomCode).emit('gameStarted', { room: room });
+    }
+  });
+
+  // Kick by host
+  socket.on('kick', ({ roomCode, targetId }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    const host = room.players.find(p => p.isHost);
+    if (!host || host.id !== socket.id) return; // only host can kick
+    const index = room.players.findIndex(p => p.id === targetId);
+    if (index === -1) return;
+    const kicked = room.players[index];
+    room.players.splice(index, 1);
+    delete room.ready[targetId];
+    try {
+      io.to(targetId).emit('kicked');
+      const sock = io.sockets.sockets.get(targetId);
+      if (sock) {
+        sock.leave(roomCode);
+        sock.disconnect(true);
+      }
+    } catch {}
+    io.to(roomCode).emit('playerLeft', { room: room });
   });
 
   socket.on('skipText', ({ roomCode, username, currentPassage }) => {
@@ -190,6 +250,7 @@ io.on('connection', (socket) => {
     Object.keys(rooms).forEach(roomCode => {
       const room = rooms[roomCode];
       room.players = room.players.filter(p => p.id !== socket.id);
+      if (room.ready) delete room.ready[socket.id];
       
       if (room.players.length === 0) {
         delete rooms[roomCode];
