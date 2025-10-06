@@ -171,6 +171,14 @@ io.on('connection', (socket) => {
     const totalPlayers = connectedIds.length; // tüm bağlı ve odada olan oyuncular
     const totalVotesFiltered = Object.keys(room.votes).filter(id => connectedIds.includes(id)).length;
 
+    console.log('DEBUG: Vote logic:', { 
+      totalPlayers, 
+      totalVotesFiltered, 
+      roomPlayers: room.players.length,
+      connectedIds: connectedIds.length,
+      votes: Object.keys(room.votes).length
+    });
+
     // Voters by choice (usernames) - sadece bağlı oyuncular
     const votersByChoice = {};
     Object.entries(room.votes).forEach(([voterId, voterChoice]) => {
@@ -193,6 +201,20 @@ io.on('connection', (socket) => {
       if (!connectedIds.includes(voterId)) return; // sadece bağlı oylar
       voteCounts[vote] = (voteCounts[vote] || 0) + 1;
     });
+
+    // Tek oyuncu modu: ilk oyda hemen ilerle
+    if (totalPlayers === 1 && totalVotesFiltered >= 1) {
+      const onlyVoterId = connectedIds[0];
+      const winner = room.votes[onlyVoterId];
+      const voteCounts = { [winner]: 1 };
+      const votersByChoiceFinal = { [winner]: [ (room.players.find(p=>p.id===onlyVoterId)?.username) || 'Anon' ] };
+      room.votes = {};
+      const nextPassage = room.currentPassage + 1;
+      room.currentPassage = nextPassage;
+      const passageId = winner;
+      io.to(roomCode).emit('voteResult', { choice: winner, voteCounts, votersByChoice: votersByChoiceFinal, nextPassage: passageId, achievement: null });
+      return;
+    }
 
     // Tüm oyuncular oy verince sonucu hesapla (çoğunluk çıkmadıysa/tie durumu)
     if (totalPlayers >= 2 && totalVotesFiltered === totalPlayers) {
