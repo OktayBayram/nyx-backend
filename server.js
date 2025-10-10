@@ -37,7 +37,7 @@ io.on('connection', (socket) => {
       currentPassage: 0,
       votes: {},
       gameStarted: false,
-      capacity: [2,3,5].includes(capacity) ? capacity : 2,
+      capacity: [1,2,3,5].includes(capacity) ? capacity : 2,
       ready: {}
     };
 
@@ -167,7 +167,7 @@ io.on('connection', (socket) => {
     const roomSet = io.sockets.adapter.rooms.get(roomCode);
     const connectedIds = room.players
       .map(p => p.id)
-      .filter(id => roomSet && roomSet.has(id) && io.sockets.sockets.get(id));
+      .filter(id => io.sockets.sockets.get(id) && (!roomSet || roomSet.has(id)));
     const totalPlayers = connectedIds.length; // tüm bağlı ve odada olan oyuncular
     const totalVotesFiltered = Object.keys(room.votes).filter(id => connectedIds.includes(id)).length;
 
